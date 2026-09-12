@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#000000" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+  <!-- Background Squircle for GNOME -->
+  <rect x="8" y="8" width="112" height="112" rx="26" fill="#18181b" filter="url(#shadow)"/>
+  <!-- Official Mistral Logo Geometry (scaled to center) -->
+  <g transform="translate(19, 32) scale(4.285)">
+    <path d="M6 0H3V3H6V0Z" fill="#FFAF01"/>
+    <path d="M6 9H3V12H6V9Z" fill="#E61300"/>
+    <path d="M9 12H0V15H9V12Z" fill="#C4001D"/>
+    <path d="M9 3H3V6H9V3Z" fill="#FF8204"/>
+    <path d="M12 9H9V12H12V9Z" fill="#E61300"/>
+    <path d="M18 6H3V9H18V6Z" fill="#FA500F"/>
+    <path d="M18 3H12V6H18V3Z" fill="#FF8204"/>
+    <path d="M18 0H15V3H18V0Z" fill="#FFAF01"/>
+    <path d="M18 9H15V12H18V9Z" fill="#E61300"/>
+    <path d="M21 12H12V15H21V12Z" fill="#C4001D"/>
+  </g>
+</svg>

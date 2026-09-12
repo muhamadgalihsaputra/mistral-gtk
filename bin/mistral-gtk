@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+import sys
+import os
+
+# Filter out literal desktop placeholders if passed erroneously
+filtered_args = [arg for arg in sys.argv if arg not in ("%u", "%U")]
+if not filtered_args:
+    filtered_args = [sys.argv[0]]
+
+# Resolve symlink to real project directory
+real_script_path = os.path.realpath(__file__)
+repo_dir = os.path.dirname(os.path.dirname(real_script_path))
+if repo_dir not in sys.path:
+    sys.path.insert(0, repo_dir)
+
+from mistral_gtk.app import MistralApp
+
+if __name__ == "__main__":
+    app = MistralApp()
+    sys.exit(app.run(filtered_args))

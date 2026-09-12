@@ -1,0 +1,18 @@
+[Desktop Entry]
+Name=Mistral
+GenericName=AI Chat Assistant
+Comment=Lightweight, native GTK4/Libadwaita desktop client for Mistral AI
+Exec=/home/galyarder/.local/bin/mistral-gtk %U
+Icon=mistral-gtk
+Terminal=false
+Type=Application
+Categories=Network;Utility;Chat;InstantMessaging;
+StartupWMClass=io.github.mistral_gtk.desktop
+Keywords=mistral;lechat;ai;llm;chat;assistant;
+MimeType=x-scheme-handler/mistral;
+
+Actions=NewChat;
+
+[Desktop Action NewChat]
+Name=Chat Baru
+Exec=/home/galyarder/.local/bin/mistral-gtk
