@@ -36,8 +36,8 @@ Setelah di-install, aplikasi akan muncul di daftar aplikasi GNOME dengan nama **
 ## Struktur Direktori
 
 - `bin/mistral-gtk`: Executable launcher (dengan symlink auto-resolver)
-- `chatgpt_gtk/app.py`: Window utama Libadwaita + WebKitGTK 6.0
-- `chatgpt_gtk/tray.py`: Integrasi system tray StatusNotifierItem via D-Bus
+- `mistral_gtk/app.py`: Window utama Libadwaita + WebKitGTK 6.0
+- `mistral_gtk/tray.py`: Integrasi system tray StatusNotifierItem via D-Bus
 - `assets/`: Asset icon resmi Mistral
 - `mistral-gtk.desktop`: Desktop launcher untuk GNOME
 - `install.sh`: Script instalasi ke `~/.local`
