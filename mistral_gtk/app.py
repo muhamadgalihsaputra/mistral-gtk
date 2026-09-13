@@ -81,6 +81,10 @@ class MistralWindow(Adw.ApplicationWindow):
         self.session.set_itp_enabled(False)
         cookie_manager = self.session.get_cookie_manager()
         cookie_manager.set_accept_policy(WebKit.CookieAcceptPolicy.ALWAYS)
+        cookie_file = os.path.join(DATA_DIR, "cookies.sqlite")
+        cookie_manager.set_persistent_storage(
+            cookie_file, WebKit.CookiePersistentStorage.SQLITE
+        )
 
         # WebKit Settings
         self.settings = WebKit.Settings()
