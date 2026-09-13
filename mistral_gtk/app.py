@@ -123,24 +123,41 @@ GENERATION_SCRIPT = """
 (function() {
     let wasGenerating = false;
 
-    function checkGenerating() {
+    function isGenerating() {
+        // 1. Stop button check
         const stopBtn = document.querySelector(
-            'button[aria-label*="Stop"], ' +
-            'button[aria-label*="Arrêter"], ' +
-            'button[aria-label*="Berhenti"], ' +
-            'button[data-testid*="stop"]'
+            'button[aria-label*="Stop" i], ' +
+            'button[aria-label*="Arrêter" i], ' +
+            'button[aria-label*="Berhenti" i], ' +
+            'button[data-testid*="stop" i]'
         );
-        const isGenerating = !!stopBtn;
+        if (stopBtn) return true;
 
-        if (wasGenerating && !isGenerating) {
+        // 2. Stop icon (square rect in button)
+        const squareIcon = document.querySelector('form button svg rect, [class*="composer"] button svg rect');
+        if (squareIcon) return true;
+
+        // 3. Streaming class or data attribute in DOM
+        const streamingEl = document.querySelector('.result-streaming, [class*="result-streaming"], [data-is-streaming="true"]');
+        if (streamingEl) return true;
+
+        return false;
+    }
+
+    function checkLoop() {
+        const generating = isGenerating();
+
+        if (generating) {
+            wasGenerating = true;
+        } else if (wasGenerating) {
+            wasGenerating = false;
             if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.generation_done) {
                 window.webkit.messageHandlers.generation_done.postMessage("done");
             }
         }
-        wasGenerating = isGenerating;
     }
 
-    setInterval(checkGenerating, 400);
+    setInterval(checkLoop, 300);
 })();
 """
 
@@ -465,26 +482,68 @@ class MistralWindow(Adw.ApplicationWindow):
             except Exception:
                 self.title_widget.set_subtitle("chat.mistral.ai")
 
+    def send_desktop_notification(self, summary, body, urgency=2):
+        """Send desktop notification via direct D-Bus with fallback to GApplication."""
+        try:
+            bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            proxy = Gio.DBusProxy.new_sync(
+                bus,
+                Gio.DBusProxyFlags.NONE,
+                None,
+                "org.freedesktop.Notifications",
+                "/org/freedesktop/Notifications",
+                "org.freedesktop.Notifications",
+                None
+            )
+            hints = {
+                "desktop-entry": GLib.Variant("s", "mistral-gtk"),
+                "urgency": GLib.Variant("y", urgency),
+            }
+            proxy.Notify(
+                "(susssasa{sv}i)",
+                "Mistral",
+                0,
+                "mistral-gtk",
+                summary,
+                body,
+                [],
+                hints,
+                6000
+            )
+            print(f"[mistral-gtk] Notifikasi desktop terkirim: {summary} - {body}")
+        except Exception as e:
+            print(f"[mistral-gtk] D-Bus notification error: {e}")
+
+        try:
+            notif = Gio.Notification.new(summary)
+            notif.set_body(body)
+            notif.set_priority(Gio.NotificationPriority.HIGH)
+            self.app.send_notification("mistral-notify", notif)
+        except Exception:
+            pass
+
     def on_window_active_changed(self, *_):
         if self.is_active():
             self.web_view.grab_focus()
+            if hasattr(self, "tray") and self.tray:
+                self.tray.set_attention(False)
 
     def on_show_notification(self, web_view, notification):
         title = notification.get_title() or "Mistral"
         body = notification.get_body() or ""
-        notif = Gio.Notification.new(title)
-        if body:
-            notif.set_body(body)
-        notif.set_priority(Gio.NotificationPriority.HIGH)
-        self.app.send_notification("mistral-web-notif", notif)
+        self.send_desktop_notification(title, body, urgency=1)
         return True
 
     def on_generation_done(self, manager, js_result):
-        if not self.get_visible() or not self.is_active():
-            notif = Gio.Notification.new("Mistral")
-            notif.set_body("Jawaban selesai dibuat")
-            notif.set_priority(Gio.NotificationPriority.HIGH)
-            self.app.send_notification("mistral-generation-done", notif)
+        print("[mistral-gtk] Selesai generate respon!")
+        if not self.is_active() or not self.get_visible():
+            self.send_desktop_notification(
+                summary="Mistral",
+                body="Jawaban selesai dibuat",
+                urgency=2
+            )
+            if hasattr(self, "tray") and self.tray:
+                self.tray.set_attention(True, "Mistral: Jawaban selesai dibuat")
 
     def on_decide_policy(self, web_view, decision, decision_type):
         if decision_type == WebKit.PolicyDecisionType.RESPONSE:
@@ -592,11 +651,15 @@ class MistralWindow(Adw.ApplicationWindow):
                 dl.set_destination(dest_path)
 
                 def on_finished(d):
+                    filename = os.path.basename(dest_path)
                     print(f"[mistral-gtk] Download selesai: {dest_path}")
-                    notif = Gio.Notification.new("Download Selesai")
-                    notif.set_body(os.path.basename(dest_path))
-                    notif.set_priority(Gio.NotificationPriority.HIGH)
-                    self.app.send_notification("mistral-download-finished", notif)
+                    self.send_desktop_notification(
+                        summary="Download Selesai",
+                        body=f"{filename} tersimpan di ~/Downloads",
+                        urgency=2
+                    )
+                    if hasattr(self, "tray") and self.tray:
+                        self.tray.set_attention(True, f"Download: {filename}")
 
                 dl.connect("finished", on_finished)
                 dl.connect(
@@ -638,6 +701,7 @@ class MistralApp(Adw.Application):
         if not self.win:
             self.win = MistralWindow(self)
             self.tray = StatusNotifierTray(self, self.win)
+            self.win.tray = self.tray
         self.win.set_visible(True)
         self.win.present()
         self.win.web_view.grab_focus()
