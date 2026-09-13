@@ -22,6 +22,47 @@ USER_AGENT = (
     "(KHTML, like Gecko) Version/18.3 Safari/605.1.15"
 )
 
+AUTH_DOMAINS = (
+    "accounts.google.com",
+    "appleid.apple.com",
+    "login.microsoftonline.com",
+    "login.live.com",
+    "github.com",
+    "auth0.com",
+    "auth.mistral.ai",
+    "clerk.com",
+    "okta.com",
+)
+
+
+def is_auth_url(url_str):
+    if not url_str:
+        return False
+    try:
+        from urllib.parse import urlparse
+        p = urlparse(url_str)
+        host = p.netloc.lower()
+        if any(ad in host for ad in AUTH_DOMAINS):
+            return True
+        path = p.path.lower()
+        if any(kw in path for kw in ("/auth/", "/login", "/signin", "/oauth", "/sso")):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def is_same_app_domain(url_str):
+    if not url_str:
+        return False
+    try:
+        from urllib.parse import urlparse
+        host = urlparse(url_str).netloc.lower()
+        return any(d in host for d in ("mistral.ai", "console.mistral.ai", "chat.mistral.ai"))
+    except Exception:
+        return False
+
+
 STEALTH_SCRIPT = """
 try {
     Object.defineProperty(navigator, 'webdriver', {
@@ -31,14 +72,76 @@ try {
 } catch(e) {}
 """
 
-# Auto-focus the chat input field after every page load.
+# Auto-focus the chat input field with continuous polling, DOM observer, and window focus hooks.
 FOCUS_SCRIPT = """
-window.addEventListener('load', function() {
-    setTimeout(function() {
-        var el = document.querySelector('textarea, [contenteditable="true"], input[type="text"]');
-        if (el) { el.focus(); }
-    }, 300);
-});
+(function() {
+    function focusInput() {
+        const selectors = [
+            'textarea[tabindex="0"]',
+            'textarea',
+            '[contenteditable="true"]',
+            'input[type="text"]'
+        ];
+        for (const s of selectors) {
+            const el = document.querySelector(s);
+            if (el && el.offsetParent !== null && !el.disabled) {
+                el.focus();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    let count = 0;
+    const interval = setInterval(() => {
+        count++;
+        if (focusInput() || count > 30) {
+            clearInterval(interval);
+        }
+    }, 200);
+
+    window.addEventListener('focus', () => {
+        focusInput();
+    });
+
+    if (window.MutationObserver) {
+        let obsCount = 0;
+        const observer = new MutationObserver(() => {
+            obsCount++;
+            if (focusInput() || obsCount > 25) {
+                observer.disconnect();
+            }
+        });
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+        setTimeout(() => observer.disconnect(), 10000);
+    }
+})();
+"""
+
+# Track LLM streaming/generation state and notify host when complete
+GENERATION_SCRIPT = """
+(function() {
+    let wasGenerating = false;
+
+    function checkGenerating() {
+        const stopBtn = document.querySelector(
+            'button[aria-label*="Stop"], ' +
+            'button[aria-label*="Arrêter"], ' +
+            'button[aria-label*="Berhenti"], ' +
+            'button[data-testid*="stop"]'
+        );
+        const isGenerating = !!stopBtn;
+
+        if (wasGenerating && !isGenerating) {
+            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.generation_done) {
+                window.webkit.messageHandlers.generation_done.postMessage("done");
+            }
+        }
+        wasGenerating = isGenerating;
+    }
+
+    setInterval(checkGenerating, 400);
+})();
 """
 
 DATA_DIR = os.path.expanduser("~/.local/share/mistral-gtk")
@@ -128,6 +231,22 @@ class MistralWindow(Adw.ApplicationWindow):
         )
         self.user_content_manager.add_script(focus_user_script)
 
+        # Monitor LLM generation completion
+        generation_user_script = WebKit.UserScript(
+            source=GENERATION_SCRIPT,
+            injected_frames=WebKit.UserContentInjectedFrames.ALL_FRAMES,
+            injection_time=WebKit.UserScriptInjectionTime.END
+        )
+        self.user_content_manager.add_script(generation_user_script)
+        self.user_content_manager.register_script_message_handler("generation_done")
+        self.user_content_manager.connect(
+            "script-message-received::generation_done",
+            self.on_generation_done
+        )
+
+        # Ensure keyboard focus is on web_view when window becomes active
+        self.connect("notify::is-active", self.on_window_active_changed)
+
         # Main Layout Box
         self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.set_content(self.main_box)
@@ -196,6 +315,8 @@ class MistralWindow(Adw.ApplicationWindow):
         self.web_view.connect("load-changed", self.on_load_changed)
         self.web_view.connect("create", self.on_create_popup)
         self.web_view.connect("permission-request", self.on_permission_request)
+        self.web_view.connect("show-notification", self.on_show_notification)
+        self.web_view.connect("decide-policy", self.on_decide_policy)
         self.session.connect("download-started", self.on_download_started)
 
         # Key controller for shortcuts
@@ -344,14 +465,55 @@ class MistralWindow(Adw.ApplicationWindow):
             except Exception:
                 self.title_widget.set_subtitle("chat.mistral.ai")
 
+    def on_window_active_changed(self, *_):
+        if self.is_active():
+            self.web_view.grab_focus()
+
+    def on_show_notification(self, web_view, notification):
+        title = notification.get_title() or "Mistral"
+        body = notification.get_body() or ""
+        notif = Gio.Notification.new(title)
+        if body:
+            notif.set_body(body)
+        notif.set_priority(Gio.NotificationPriority.HIGH)
+        self.app.send_notification("mistral-web-notif", notif)
+        return True
+
+    def on_generation_done(self, manager, js_result):
+        if not self.get_visible() or not self.is_active():
+            notif = Gio.Notification.new("Mistral")
+            notif.set_body("Jawaban selesai dibuat")
+            notif.set_priority(Gio.NotificationPriority.HIGH)
+            self.app.send_notification("mistral-generation-done", notif)
+
+    def on_decide_policy(self, web_view, decision, decision_type):
+        if decision_type == WebKit.PolicyDecisionType.RESPONSE:
+            if not decision.is_mime_type_supported():
+                decision.download()
+                return True
+        return False
+
     def on_load_changed(self, web_view, load_event):
         if load_event == WebKit.LoadEvent.FINISHED:
             self.progress_bar.set_visible(False)
             self.btn_back.set_sensitive(web_view.can_go_back())
             self.btn_forward.set_sensitive(web_view.can_go_forward())
+            self.web_view.grab_focus()
 
     def on_create_popup(self, web_view, navigation_action):
-        """Handle popup windows (such as Google OAuth, Microsoft, or GitHub Login)."""
+        """Handle popup windows (OAuth logins) and route external links to default browser."""
+        req = navigation_action.get_request()
+        uri = req.get_uri() if req else None
+
+        # External non-auth links open directly in system browser
+        if uri and uri not in ("about:blank", ""):
+            if not is_auth_url(uri) and not is_same_app_domain(uri):
+                try:
+                    Gio.AppInfo.launch_default_for_uri(uri, None)
+                except Exception as e:
+                    print(f"[mistral-gtk] Error launching default browser: {e}")
+                return None
+
         popup = Adw.Window(transient_for=self, modal=False)
         popup.set_default_size(520, 680)
 
@@ -374,6 +536,28 @@ class MistralWindow(Adw.ApplicationWindow):
         popup_web_view.set_hexpand(True)
         popup_box.append(popup_web_view)
 
+        def on_popup_decide_policy(wv, decision, decision_type):
+            if decision_type == WebKit.PolicyDecisionType.NAVIGATION_ACTION:
+                nav_action = decision.get_navigation_action()
+                target_req = nav_action.get_request()
+                target_uri = target_req.get_uri() if target_req else None
+                if target_uri and target_uri not in ("about:blank", ""):
+                    if not is_auth_url(target_uri) and not is_same_app_domain(target_uri):
+                        try:
+                            Gio.AppInfo.launch_default_for_uri(target_uri, None)
+                        except Exception as e:
+                            print(f"[mistral-gtk] Error launching default browser: {e}")
+                        decision.ignore()
+                        popup.close()
+                        return True
+            elif decision_type == WebKit.PolicyDecisionType.RESPONSE:
+                if not decision.is_mime_type_supported():
+                    decision.download()
+                    popup.close()
+                    return True
+            return False
+
+        popup_web_view.connect("decide-policy", on_popup_decide_policy)
         popup_web_view.connect(
             "notify::title",
             lambda wv, _: popup_title.set_title(wv.get_title() or "Login")
@@ -404,11 +588,17 @@ class MistralWindow(Adw.ApplicationWindow):
                     dest_path = f"{base} ({counter}){ext}"
                     counter += 1
 
-                dl.set_destination(GLib.filename_to_uri(dest_path))
-                dl.connect(
-                    "finished",
-                    lambda d: print(f"[mistral-gtk] Download selesai: {dest_path}")
-                )
+                # WebKitDownload expects a native absolute path, NOT a file:// URI
+                dl.set_destination(dest_path)
+
+                def on_finished(d):
+                    print(f"[mistral-gtk] Download selesai: {dest_path}")
+                    notif = Gio.Notification.new("Download Selesai")
+                    notif.set_body(os.path.basename(dest_path))
+                    notif.set_priority(Gio.NotificationPriority.HIGH)
+                    self.app.send_notification("mistral-download-finished", notif)
+
+                dl.connect("finished", on_finished)
                 dl.connect(
                     "failed",
                     lambda d, err: print(f"[mistral-gtk] Download gagal: {err.message}")
@@ -450,6 +640,7 @@ class MistralApp(Adw.Application):
             self.tray = StatusNotifierTray(self, self.win)
         self.win.set_visible(True)
         self.win.present()
+        self.win.web_view.grab_focus()
 
     def do_open(self, files, hint):
         self.do_activate()
